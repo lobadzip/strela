@@ -37,6 +37,13 @@ jobs:
           msg=$(grep -E -A25 "What went wrong|^e: |FAILED$" gradle.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
           echo "::error title=Gradle::${msg:-see the job log}"
 
+      # Diagnostics for the packing step below, readable without signing in.
+      - name: Check the site folder
+        run: |
+          d=composeApp/build/dist/wasmJs/productionExecutable
+          out=$( { ls -la "$d"; find "$d" -type l; tar --dereference --hard-dereference --directory "$d" -cf "$RUNNER_TEMP/check.tar" --exclude=.git --exclude=.github . ; echo "tar exit $?"; } 2>&1 | head -40 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+          echo "::notice title=Site folder::$out"
+
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
