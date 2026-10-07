@@ -58,6 +58,19 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// The baked routes live with the app's resources; the server reads the same file from its classpath.
+tasks.processResources {
+    from(rootProject.file("composeApp/src/commonMain/composeResources/files/routes.json"))
+}
+
+tasks.register<JavaExec>("bakeRoutes") {
+    description = "Precomputes OSRM routes for every trip in the demo city"
+    group = "application"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "io.github.lobadzip.strela.server.routing.BakeRoutesKt"
+    workingDir = rootDir
+}
+
 // Run from the repository root so the web build and the route cache resolve the same way as in Docker.
 tasks.named<JavaExec>("run") {
     workingDir = rootDir

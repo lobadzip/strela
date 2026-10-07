@@ -1,4 +1,4 @@
-package io.github.lobadzip.strela.server.dispatch
+package io.github.lobadzip.strela.core
 
 import io.github.lobadzip.strela.api.DeliverRequest
 import io.github.lobadzip.strela.api.LocationUpdate
@@ -17,33 +17,34 @@ import io.github.lobadzip.strela.model.Polyline
 import io.github.lobadzip.strela.model.ShiftStats
 import io.github.lobadzip.strela.model.TrackedCourier
 import io.github.lobadzip.strela.model.TrackingView
-import io.github.lobadzip.strela.server.api.badRequest
-import io.github.lobadzip.strela.server.api.conflict
-import io.github.lobadzip.strela.server.api.forbidden
-import io.github.lobadzip.strela.server.api.notFound
-import io.github.lobadzip.strela.server.api.unauthorized
-import io.github.lobadzip.strela.server.demo.DemoCity
-import io.github.lobadzip.strela.server.routing.RouteProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.Base64
-import java.util.UUID
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.random.Random
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * The rules of the delivery business. Every read and write goes through one lock, which is plenty
  * for a demo city and makes races (two couriers grabbing the same order) impossible to get wrong.
  *
  * Calls to the router never happen under the lock: a slow network must not freeze everybody else.
+ *
+ * Plain common Kotlin: the server runs it behind HTTP, and the apps run the very same rules
+ * in-process for the offline demo.
  */
+@OptIn(ExperimentalUuidApi::class, ExperimentalEncodingApi::class)
 class DeliveryService(
     private val world: World,
     private val routes: RouteProvider,
     val speedup: Double,
-    private val clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = systemClock,
 ) {
     private val mutex = Mutex()
     private val version = MutableStateFlow(0L)
@@ -70,7 +71,7 @@ class DeliveryService(
         if (!courier.profile.loginAllowed) throw forbidden("Этим курьером управляет симулятор")
         if (request.code.trim() != DemoCity.DEMO_CODE) throw badRequest("wrong_code", "Неверный код. В демо подходит 0000")
 
-        val token = UUID.randomUUID().toString()
+        val token = Uuid.random().toString()
         sessions[token] = courier.id
         courier.lastHumanActivity = clock()
         LoginResponse(token, courier.toDto())
@@ -161,8 +162,8 @@ class DeliveryService(
                     else "Получите от клиента ровно ${Format.rub(order.cashToCollectKopecks)}",
                 )
             }
-            val photoId = UUID.randomUUID().toString()
-            photos[photoId] = photo
+            val photoId = Uuid.random().toString()
+            storePhoto(photoId, photo)
             finish(courier, order, DeliveryProof("/api/photos/$photoId", signature, request.cashCollectedKopecks))
         }
     }
@@ -379,7 +380,7 @@ class DeliveryService(
 
     private fun decodePhoto(base64: String): ByteArray {
         val bytes = try {
-            Base64.getDecoder().decode(base64)
+            Base64.decode(base64)
         } catch (_: IllegalArgumentException) {
             throw badRequest("bad_photo", "Фото не прочиталось, снимите ещё раз")
         }
@@ -466,3 +467,7 @@ class DeliveryService(
         const val MAX_GPS_JUMP_M = 500.0
     }
 }
+
+/** Wall-clock milliseconds on every platform the rules run on. */
+@OptIn(ExperimentalTime::class)
+val systemClock: () -> Long = { Clock.System.now().toEpochMilliseconds() }

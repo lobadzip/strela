@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One command for a demo on the local network: builds the web app and the server, then runs them.
-# Phones on the same Wi-Fi open the printed address; the Android app already points at it.
+# The demo with a real backend: builds the web app and the Ktor server, then runs them.
+# Phones on the same Wi-Fi open the printed address; in the Android app, switch the city to this server.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

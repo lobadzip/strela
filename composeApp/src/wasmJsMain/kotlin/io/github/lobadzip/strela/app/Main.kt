@@ -53,21 +53,40 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.js.Js
 import kotlinx.browser.document
 import kotlinx.browser.window
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val REPO_URL = "https://github.com/lobadzip/strela"
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
+    // The browser sends its own User-Agent and Referer and caches tiles by itself.
+    val http = HttpClient(Js) { strelaDefaults() }
+    MainScope().launch {
+        // Served by the Strela server: talk to it. Served as static files (GitHub Pages): run the city here.
+        val origin = window.location.origin + window.location.pathname.substringBefore("/track/").trimEnd('/')
+        val hasServer = withTimeoutOrNull(2_500) {
+            runCatching { http.get("$origin/health").bodyAsText().trim() == "ok" }.getOrDefault(false)
+        } == true
+        start(http, if (hasServer) origin else null)
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+private fun start(http: HttpClient, serverUrl: String?) {
     val graph = AppGraph(
         store = BrowserStore(),
         platform = BrowserServices(),
         location = null,
-        defaultServerUrl = window.location.origin,
-        // The browser sends its own User-Agent and Referer and caches tiles by itself.
-        http = HttpClient(Js) { strelaDefaults() },
+        http = http,
+        suggestedServerUrl = null,
+        webServerUrl = serverUrl,
     )
-    val trackCode = Regex("^/track/([A-Za-z0-9-]+)").find(window.location.pathname)?.groupValues?.get(1)
+    val trackCode = Regex("/track/([A-Za-z0-9-]+)").find(window.location.pathname)?.groupValues?.get(1)
     ComposeViewport(document.body!!) {
         when {
             trackCode != null -> StrelaTheme { TrackingScreen(graph, trackCode, Modifier.fillMaxSize()) }
@@ -90,7 +109,7 @@ private fun Showcase(graph: AppGraph) {
         // Until the visitor takes an order, follow one of the simulated couriers.
         LaunchedEffect(myOrder) {
             while (myOrder == null) {
-                val live = runCatching { graph.api.liveCodes() }.getOrDefault(emptyList())
+                val live = runCatching { graph.backend.liveCodes() }.getOrDefault(emptyList())
                 if (botOrder == null || botOrder !in live) botOrder = live.firstOrNull()
                 delay(8_000)
             }
@@ -108,7 +127,7 @@ private fun Showcase(graph: AppGraph) {
                 horizontalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Intro(Modifier.widthIn(max = 380.dp), mineTracked = myOrder != null)
+                Intro(Modifier.widthIn(max = 380.dp), mineTracked = myOrder != null, local = graph.backend.isLocal)
                 Phone(phoneScale, "Курьер") { CourierApp(graph) }
                 Phone(phoneScale, if (myOrder != null) "Клиент · ваш заказ" else "Клиент · курьер-симулятор") {
                     if (tracked != null) {
@@ -123,7 +142,7 @@ private fun Showcase(graph: AppGraph) {
 }
 
 @Composable
-private fun Intro(modifier: Modifier, mineTracked: Boolean) {
+private fun Intro(modifier: Modifier, mineTracked: Boolean, local: Boolean) {
     val c = Strela.colors
     Column(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -144,7 +163,12 @@ private fun Intro(modifier: Modifier, mineTracked: Boolean) {
         Text(
             "Слева — приложение курьера, справа — страница, которую видит клиент. " +
                 "Это один и тот же код на Compose: он же собирается в Android-приложение. " +
-                "Сервер на Ktor гоняет курьеров-симуляторов по настоящим улицам Москвы.",
+                if (local) {
+                    "Город работает прямо в этой вкладке: те же правила и симулятор, что на сервере Ktor, " +
+                        "курьеры-боты ездят по настоящим улицам Москвы."
+                } else {
+                    "Сервер на Ktor гоняет курьеров-симуляторов по настоящим улицам Москвы."
+                },
             style = MaterialTheme.typography.bodyLarge,
             color = Color.White.copy(alpha = 0.72f),
         )

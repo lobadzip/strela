@@ -1,5 +1,9 @@
 package io.github.lobadzip.strela.server.routing
 
+import io.github.lobadzip.strela.core.Route
+import io.github.lobadzip.strela.core.RouteKey
+import io.github.lobadzip.strela.core.RouteProvider
+import io.github.lobadzip.strela.core.StraightLineRoutes
 import io.github.lobadzip.strela.model.Geo
 import io.github.lobadzip.strela.model.GeoPoint
 import io.ktor.client.HttpClient
@@ -10,7 +14,6 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.double
@@ -20,24 +23,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.ceil
-
-@Serializable
-data class Route(val points: List<GeoPoint>, val distanceMeters: Double)
-
-fun interface RouteProvider {
-    suspend fun route(from: GeoPoint, to: GeoPoint): Route
-}
-
-/** No network, no surprises: tests and offline demos drive along the crow's path. */
-class StraightLineRoutes(private val stepMeters: Double = 40.0) : RouteProvider {
-    override suspend fun route(from: GeoPoint, to: GeoPoint): Route {
-        val distance = Geo.distance(from, to)
-        val steps = ceil(distance / stepMeters).toInt().coerceAtLeast(1)
-        val points = (0..steps).map { Geo.lerp(from, to, it.toDouble() / steps) }
-        return Route(points, distance)
-    }
-}
 
 /**
  * Road routes from an OSRM server, cached on disk because the demo city reuses the same addresses
@@ -65,7 +50,7 @@ class OsrmRoutes(
     }
 
     override suspend fun route(from: GeoPoint, to: GeoPoint): Route {
-        val key = key(from, to)
+        val key = RouteKey.of(from, to)
         cache[key]?.let { return it }
 
         val fetched = runCatching { fetch(from, to) }
@@ -95,14 +80,15 @@ class OsrmRoutes(
             val (lon, lat) = it.jsonArray.map { n -> n.jsonPrimitive.double }
             GeoPoint(lat, lon)
         }
-        // OSRM snaps both ends to the nearest road; join them back to the actual doors.
+        // OSRM snaps both ends to the nearest road; join them back to the exact doors, so a courier
+        // who arrives stands on the very point the next route will start from.
         val points = buildList {
-            if (Geo.distance(from, coordinates.first()) > 3) add(from)
-            addAll(coordinates)
-            if (Geo.distance(to, coordinates.last()) > 3) add(to)
+            add(from)
+            addAll(coordinates.map { it.rounded() }.filter { it != from && it != to })
+            add(to)
         }
         val distance = points.zipWithNext { a, b -> Geo.distance(a, b) }.sum()
-        return Route(points.map { it.rounded() }, distance)
+        return Route(points, distance)
     }
 
     private fun persist() {
@@ -116,11 +102,7 @@ class OsrmRoutes(
     private fun GeoPoint.rounded() = GeoPoint(lat.round6(), lon.round6())
     private fun Double.round6() = Math.round(this * 1e6) / 1e6
 
-    companion object {
-        private const val MIN_INTERVAL_MS = 1_100L
-
-        /** ~10 m precision: two requests from the same doorway share a cache entry. */
-        fun key(from: GeoPoint, to: GeoPoint): String =
-            "%.4f,%.4f;%.4f,%.4f".format(java.util.Locale.ROOT, from.lat, from.lon, to.lat, to.lon)
+    private companion object {
+        const val MIN_INTERVAL_MS = 1_100L
     }
 }

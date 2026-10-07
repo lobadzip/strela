@@ -37,11 +37,12 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 object AndroidPlatform {
-    fun createGraph(app: Application, defaultServerUrl: String) = AppGraph(
+    /** The app starts as a self-contained demo; [lanServerUrl] is what "connect to a server" suggests. */
+    fun createGraph(app: Application, lanServerUrl: String) = AppGraph(
         store = PrefsStore(app),
         platform = AndroidServices(app),
         location = AndroidLocation(app),
-        defaultServerUrl = defaultServerUrl,
+        suggestedServerUrl = lanServerUrl,
         http = HttpClient(OkHttp) {
             strelaDefaults()
             // OpenStreetMap's tile policy: say who you are, and keep what you downloaded.

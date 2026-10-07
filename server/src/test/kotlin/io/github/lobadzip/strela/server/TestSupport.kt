@@ -3,7 +3,7 @@ package io.github.lobadzip.strela.server
 import io.github.lobadzip.strela.api.DeliverRequest
 import io.github.lobadzip.strela.api.LoginRequest
 import io.github.lobadzip.strela.model.Signature
-import io.github.lobadzip.strela.server.routing.StraightLineRoutes
+import io.github.lobadzip.strela.core.StraightLineRoutes
 import java.io.File
 import java.util.Base64
 

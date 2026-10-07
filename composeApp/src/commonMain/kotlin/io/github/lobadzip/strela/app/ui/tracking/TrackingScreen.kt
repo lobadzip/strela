@@ -71,8 +71,6 @@ import io.github.lobadzip.strela.model.Format
 import io.github.lobadzip.strela.model.GeoPoint
 import io.github.lobadzip.strela.model.OrderStatus
 import io.github.lobadzip.strela.model.TrackingView
-import io.ktor.client.request.get
-import io.ktor.client.statement.readRawBytes
 import org.jetbrains.compose.resources.decodeToImageBitmap
 
 /** What the customer opens from the SMS link: where the courier is and when they will ring. */
@@ -317,7 +315,7 @@ private fun Timeline(view: TrackingView) {
 private fun ProofPhoto(graph: AppGraph, url: String) {
     val image = remember(url) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(url) {
-        image.value = runCatching { graph.http.get(graph.api.absolute(url)).readRawBytes().decodeToImageBitmap() }.getOrNull()
+        image.value = graph.backend.photo(url)?.let { runCatching { it.decodeToImageBitmap() }.getOrNull() }
     }
     image.value?.let {
         androidx.compose.foundation.Image(

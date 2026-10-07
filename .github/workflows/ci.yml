@@ -40,7 +40,7 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
 
-      # A CI build has no LAN to point at; the server address is set in the app's login screen.
+      # The APK runs its own demo city; this only pre-fills the "connect to a server" dialog.
       - name: Build the release APK
         run: ./gradlew :androidApp:assembleRelease --no-daemon -Pstrela.serverUrl=http://10.0.2.2:8080
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the release APK and installs it on the phone connected over USB (USB debugging on).
-# The APK talks to this computer's address on the local network; run scripts/demo.sh alongside.
+# The app runs its demo city by itself; scripts/demo.sh is only needed to try it against the server.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

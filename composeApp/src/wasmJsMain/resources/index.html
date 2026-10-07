@@ -3,8 +3,12 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <!-- /track/ST-1234 is served this same page; everything below must resolve from the root. -->
-    <base href="/">
+    <script>
+        // /track/ST-1234 gets this same page; resolve resources from the app's root, wherever it is hosted.
+        if (location.pathname.indexOf('/track/') >= 0) {
+            document.write('<base href="' + location.pathname.split('/track/')[0] + '/">');
+        }
+    </script>
     <title>Strela — курьерская доставка на Kotlin Multiplatform</title>
     <meta name="description" content="Демо: приложение курьера и страница отслеживания заказа, один код на Compose Multiplatform.">
     <meta name="theme-color" content="#FF5A1F">

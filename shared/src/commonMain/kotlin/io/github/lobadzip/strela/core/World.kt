@@ -1,4 +1,4 @@
-package io.github.lobadzip.strela.server.dispatch
+package io.github.lobadzip.strela.core
 
 import io.github.lobadzip.strela.model.City
 import io.github.lobadzip.strela.model.Courier
@@ -7,7 +7,6 @@ import io.github.lobadzip.strela.model.GeoPoint
 import io.github.lobadzip.strela.model.Order
 import io.github.lobadzip.strela.model.Polyline
 import io.github.lobadzip.strela.model.Vehicle
-import io.github.lobadzip.strela.server.demo.DemoCourier
 
 /** A courier driving along a route on behalf of the simulator. */
 class Movement(val orderId: String, val path: Polyline) {
@@ -67,8 +66,12 @@ class World(val city: City) {
     val orders = LinkedHashMap<String, Order>()
     val sessions = HashMap<String, String>()
 
-    val photos = object : LinkedHashMap<String, ByteArray>() {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?) = size > MAX_PHOTOS
+    val photos = LinkedHashMap<String, ByteArray>()
+
+    /** Keeps the newest photos only: the demo runs for days and nobody needs last week's doorways. */
+    fun storePhoto(id: String, bytes: ByteArray) {
+        photos[id] = bytes
+        while (photos.size > MAX_PHOTOS) photos.remove(photos.keys.first())
     }
 
     fun activeOrderOf(courierId: String): Order? = orders.values.firstOrNull { it.courierId == courierId && it.isActive }

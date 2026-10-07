@@ -7,9 +7,9 @@ import io.github.lobadzip.strela.model.Signature
 import io.github.lobadzip.strela.server.TestCity.Companion.ALEXEY
 import io.github.lobadzip.strela.server.TestCity.Companion.MARINA
 import io.github.lobadzip.strela.server.TestCity.Companion.deliverRequest
-import io.github.lobadzip.strela.server.api.ApiException
-import io.github.lobadzip.strela.server.dispatch.DeliveryService.Intent
-import io.ktor.http.HttpStatusCode
+import io.github.lobadzip.strela.core.DeliveryException
+import io.github.lobadzip.strela.core.FailureKind
+import io.github.lobadzip.strela.core.DeliveryService.Intent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -30,8 +30,8 @@ class DeliveryServiceTest {
 
         assertCode("wrong_code") { city.service.login(ALEXEY.copy(code = "1234")) }
         assertCode("unknown_phone") { city.service.login(LoginRequest("+7 999 123-45-67", "0000")) }
-        val bot = assertFailsWith<ApiException> { city.service.login(LoginRequest("+7 000 000-00-11", "0000")) }
-        assertEquals(HttpStatusCode.Forbidden, bot.status)
+        val bot = assertFailsWith<DeliveryException> { city.service.login(LoginRequest("+7 000 000-00-11", "0000")) }
+        assertEquals(FailureKind.FORBIDDEN, bot.kind)
     }
 
     @Test
@@ -201,7 +201,7 @@ class DeliveryServiceTest {
     }
 
     private suspend fun assertCode(code: String, block: suspend () -> Unit) {
-        val e = assertFailsWith<ApiException> { block() }
+        val e = assertFailsWith<DeliveryException> { block() }
         assertEquals(code, e.code, e.message)
     }
 }

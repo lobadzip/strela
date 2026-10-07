@@ -1,4 +1,4 @@
-package io.github.lobadzip.strela.server.demo
+package io.github.lobadzip.strela.core
 
 import io.github.lobadzip.strela.model.City
 import io.github.lobadzip.strela.model.GeoPoint

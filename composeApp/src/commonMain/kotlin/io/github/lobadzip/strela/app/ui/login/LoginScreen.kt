@@ -83,10 +83,10 @@ fun LoginScreen(graph: AppGraph) {
     var loading by remember { mutableStateOf(false) }
     var demoCouriers by remember { mutableStateOf<List<Courier>>(emptyList()) }
     var editServer by remember { mutableStateOf(false) }
-    var serverUrl by remember { mutableStateOf(graph.settings.serverUrl) }
+    var backendLabel by remember { mutableStateOf(graph.backend.label) }
 
-    LaunchedEffect(serverUrl) {
-        demoCouriers = runCatching { graph.api.demoCouriers() }.getOrDefault(emptyList())
+    LaunchedEffect(backendLabel) {
+        demoCouriers = runCatching { graph.backend.demoCouriers() }.getOrDefault(emptyList())
     }
 
     fun submit(currentCode: String) {
@@ -168,14 +168,19 @@ fun LoginScreen(graph: AppGraph) {
                 }
                 Spacer(Modifier.height(18.dp))
                 Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { editServer = true }.padding(6.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(enabled = graph.canChooseServer) { editServer = true }
+                        .padding(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center,
                 ) {
                     Icon(StrelaIcons.Server, null, tint = c.textTertiary, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "Сервер: ${serverUrl.removePrefix("http://").removePrefix("https://")} · изменить",
+                        (if (graph.backend.isLocal) "Город: $backendLabel" else "Сервер: $backendLabel") +
+                            if (graph.canChooseServer) " · изменить" else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = c.textTertiary,
                     )
@@ -186,12 +191,12 @@ fun LoginScreen(graph: AppGraph) {
 
     if (editServer) {
         ServerDialog(
-            current = serverUrl,
-            default = graph.settings.defaultServerUrl,
+            current = graph.settings.serverUrl,
+            suggested = graph.suggestedServerUrl.orEmpty(),
             onDismiss = { editServer = false },
-            onSave = {
-                graph.settings.serverUrl = it
-                serverUrl = graph.settings.serverUrl
+            onChoose = {
+                graph.useServer(it)
+                backendLabel = graph.backend.label
                 editServer = false
             },
         )
@@ -379,26 +384,27 @@ private fun Hero(modifier: Modifier) {
     }
 }
 
+/** On-device demo or a real server: the one choice that decides where the city lives. */
 @Composable
-fun ServerDialog(current: String, default: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
-    var value by remember { mutableStateOf(current) }
+fun ServerDialog(current: String?, suggested: String, onDismiss: () -> Unit, onChoose: (String?) -> Unit) {
+    var value by remember { mutableStateOf(current ?: suggested) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Адрес сервера") },
+        title = { Text("Где работает город") },
         text = {
             Column {
                 Text(
-                    "Телефон и компьютер с сервером должны быть в одной сети Wi-Fi.",
+                    "Демо на устройстве: курьеры, заказы и маршруты живут прямо в приложении, сеть нужна " +
+                        "только для карты. Или подключитесь к серверу Strela в той же Wi-Fi.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Strela.colors.textSecondary,
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(value, { value = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                TextButton(onClick = { value = default }) { Text("По умолчанию: $default") }
+                OutlinedTextField(value, { value = it }, singleLine = true, label = { Text("Адрес сервера") }, modifier = Modifier.fillMaxWidth())
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(value) }) { Text("Сохранить") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+        confirmButton = { TextButton(onClick = { onChoose(value) }, enabled = value.isNotBlank()) { Text("Подключить") } },
+        dismissButton = { TextButton(onClick = { onChoose(null) }) { Text("Демо на устройстве") } },
     )
 }
 

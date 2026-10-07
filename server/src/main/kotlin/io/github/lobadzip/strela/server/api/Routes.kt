@@ -9,7 +9,7 @@ import io.github.lobadzip.strela.api.ShiftRequest
 import io.github.lobadzip.strela.model.CourierSnapshot
 import io.github.lobadzip.strela.model.TrackingView
 import io.github.lobadzip.strela.server.AppComponent
-import io.github.lobadzip.strela.server.dispatch.DeliveryService
+import io.github.lobadzip.strela.core.DeliveryService
 import io.ktor.http.CacheControl
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders

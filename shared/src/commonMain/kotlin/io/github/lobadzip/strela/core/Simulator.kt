@@ -1,19 +1,11 @@
-package io.github.lobadzip.strela.server.sim
+package io.github.lobadzip.strela.core
 
 import io.github.lobadzip.strela.model.DayEarnings
 import io.github.lobadzip.strela.model.Format
-import io.github.lobadzip.strela.server.api.ApiException
-import io.github.lobadzip.strela.server.demo.DemoCity
-import io.github.lobadzip.strela.server.demo.OrderFactory
-import io.github.lobadzip.strela.server.dispatch.CourierState
-import io.github.lobadzip.strela.server.dispatch.DeliveryService
-import io.github.lobadzip.strela.server.dispatch.DeliveryService.Intent
-import io.github.lobadzip.strela.server.routing.RouteProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import org.slf4j.LoggerFactory
 import kotlin.random.Random
 
 /**
@@ -26,8 +18,8 @@ class Simulator(
     private val routes: RouteProvider,
     private val random: Random,
     private val clock: () -> Long,
+    private val log: (String, Throwable?) -> Unit = { _, _ -> },
 ) {
-    private val log = LoggerFactory.getLogger(Simulator::class.java)
     private var lastGenerated = 0L
 
     suspend fun seed() {
@@ -56,7 +48,7 @@ class Simulator(
         for (intent in service.plan()) {
             runCatching { execute(intent) }.onFailure {
                 // A visitor beat the bot to the order, or the order expired: both are normal.
-                if (it !is ApiException) log.warn("Autopilot step {} failed", intent, it)
+                if (it !is DeliveryException) log("Autopilot step $intent failed", it)
             }
         }
         val now = clock()
@@ -66,19 +58,20 @@ class Simulator(
         }
     }
 
-    private suspend fun execute(intent: Intent) {
+    private suspend fun execute(intent: DeliveryService.Intent) {
         when (intent) {
-            is Intent.Accept -> service.accept(intent.courierId, intent.orderId)
-            is Intent.PickUp -> service.pickUp(intent.courierId, intent.orderId)
-            is Intent.Deliver -> service.deliverByAutopilot(intent.courierId, intent.orderId)
-            is Intent.Reroute -> service.reroute(intent.courierId, intent.orderId, routes.route(intent.from, intent.to).points)
+            is DeliveryService.Intent.Accept -> service.accept(intent.courierId, intent.orderId)
+            is DeliveryService.Intent.PickUp -> service.pickUp(intent.courierId, intent.orderId)
+            is DeliveryService.Intent.Deliver -> service.deliverByAutopilot(intent.courierId, intent.orderId)
+            is DeliveryService.Intent.Reroute -> service.reroute(intent.courierId, intent.orderId, routes.route(intent.from, intent.to).points)
         }
     }
 
-    fun start(scope: CoroutineScope) {
+    fun start(scope: CoroutineScope, onSeeded: () -> Unit = {}) {
         scope.launch {
             seed()
-            log.info("Demo city is live: {} couriers, speed-up ×{}", DemoCity.couriers.size, service.speedup)
+            onSeeded()
+            log("Demo city is live: ${DemoCity.couriers.size} couriers, speed-up ×${service.speedup}", null)
             launch {
                 var last = clock()
                 while (isActive) {
@@ -90,7 +83,7 @@ class Simulator(
             }
             while (isActive) {
                 delay(THINK_TICK_MS)
-                runCatching { think() }.onFailure { log.error("Simulator step failed", it) }
+                runCatching { think() }.onFailure { log("Simulator step failed", it) }
             }
         }
     }

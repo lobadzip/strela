@@ -146,10 +146,9 @@ fun ProfileScreen(graph: AppGraph, state: SessionState, onBack: () -> Unit) {
                 )
                 SettingRow(
                     icon = StrelaIcons.Server,
-                    title = "Сервер",
-                    subtitle = graph.settings.serverUrl.removePrefix("http://").removePrefix("https://") +
-                        (snapshot?.let { " · время ×${it.speedup.toInt()}" } ?: ""),
-                    onClick = { editServer = true },
+                    title = if (graph.backend.isLocal) "Город" else "Сервер",
+                    subtitle = graph.backend.label + (snapshot?.let { " · время ×${it.speedup.toInt()}" } ?: ""),
+                    onClick = if (graph.canChooseServer) ({ editServer = true }) else null,
                 )
                 SettingRow(
                     icon = StrelaIcons.Logout,
@@ -166,12 +165,11 @@ fun ProfileScreen(graph: AppGraph, state: SessionState, onBack: () -> Unit) {
     if (editServer) {
         ServerDialog(
             current = graph.settings.serverUrl,
-            default = graph.settings.defaultServerUrl,
+            suggested = graph.suggestedServerUrl.orEmpty(),
             onDismiss = { editServer = false },
-            onSave = {
-                graph.settings.serverUrl = it
+            onChoose = {
                 editServer = false
-                graph.session.signOut()
+                graph.useServer(it)
             },
         )
     }

@@ -1,6 +1,8 @@
 package io.github.lobadzip.strela.server.api
 
 import io.github.lobadzip.strela.api.ApiError
+import io.github.lobadzip.strela.core.DeliveryException
+import io.github.lobadzip.strela.core.FailureKind
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -58,8 +60,15 @@ fun Application.configureHttp() {
         allowMethod(HttpMethod.Post)
     }
     install(StatusPages) {
-        exception<ApiException> { call, e ->
-            call.respond(e.status, ApiError(e.code, e.message))
+        exception<DeliveryException> { call, e ->
+            val status = when (e.kind) {
+                FailureKind.BAD_REQUEST -> HttpStatusCode.BadRequest
+                FailureKind.UNAUTHORIZED -> HttpStatusCode.Unauthorized
+                FailureKind.FORBIDDEN -> HttpStatusCode.Forbidden
+                FailureKind.NOT_FOUND -> HttpStatusCode.NotFound
+                FailureKind.CONFLICT -> HttpStatusCode.Conflict
+            }
+            call.respond(status, ApiError(e.code, e.message))
         }
         exception<BadRequestException> { call, _ ->
             call.respond(HttpStatusCode.BadRequest, ApiError("bad_request", "Некорректный запрос"))

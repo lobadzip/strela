@@ -1,4 +1,4 @@
-package io.github.lobadzip.strela.server.demo
+package io.github.lobadzip.strela.core
 
 import io.github.lobadzip.strela.model.Geo
 import io.github.lobadzip.strela.model.GeoPoint
@@ -7,7 +7,6 @@ import io.github.lobadzip.strela.model.OrderItem
 import io.github.lobadzip.strela.model.OrderStatus
 import io.github.lobadzip.strela.model.OrderTag
 import io.github.lobadzip.strela.model.Place
-import io.github.lobadzip.strela.server.routing.RouteProvider
 import kotlin.random.Random
 
 /** Makes plausible orders: a real shop, a real street, a road route and a fee that follows the distance. */
@@ -25,7 +24,7 @@ class OrderFactory(
             DemoCity.shops.sortedBy { Geo.distance(near, it.point) }.take(3).random(random)
         }
         val home = DemoCity.homes
-            .filter { Geo.distance(shop.point, it.point) in 700.0..3_500.0 }
+            .filter { Geo.distance(shop.point, it.point) in DELIVERY_RANGE_M }
             .ifEmpty { DemoCity.homes }
             .random(random)
         val route = routes.route(shop.point, home.point)
@@ -68,6 +67,9 @@ class OrderFactory(
     }
 
     companion object {
+        /** Short enough to be a believable courier trip, long enough to be worth watching. */
+        val DELIVERY_RANGE_M = 700.0..3_500.0
+
         /** 150 ₽ to show up, 30 ₽ per kilometre, 50 ₽ for carrying something heavy; rounded to 10 ₽. */
         fun fee(distanceMeters: Double, heavy: Boolean): Long {
             val raw = 15_000 + distanceMeters / 1_000 * 3_000 + if (heavy) 5_000 else 0
