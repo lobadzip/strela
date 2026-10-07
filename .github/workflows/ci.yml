@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+defaults:
+  run:
+    # Explicit bash means -eo pipefail: `gradlew | tee` fails when Gradle fails.
+    shell: bash
+
 jobs:
   test:
     name: Tests

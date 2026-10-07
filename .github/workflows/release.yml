@@ -7,6 +7,11 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    # Explicit bash means -eo pipefail: `gradlew | tee` fails when Gradle fails.
+    shell: bash
+
 jobs:
   apk:
     name: Publish the APK
