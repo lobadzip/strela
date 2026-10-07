@@ -28,7 +28,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build the browser app
-        run: ./gradlew :composeApp:wasmJsBrowserDistribution --no-daemon
+        run: ./gradlew :composeApp:wasmJsBrowserDistribution --no-daemon 2>&1 | tee -a gradle.log
+
+      # Job logs need a signed-in admin; annotations are public. Put the actual Gradle error where anyone can read it.
+      - name: Report the Gradle error
+        if: failure()
+        run: |
+          msg=$(grep -E -A25 "What went wrong|^e: |FAILED$" gradle.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+          echo "::error title=Gradle::${msg:-see the job log}"
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

@@ -18,7 +18,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Shared and server tests
-        run: ./gradlew :shared:jvmTest :server:test --no-daemon
+        run: ./gradlew :shared:jvmTest :server:test --no-daemon 2>&1 | tee -a gradle.log
+
+      # Job logs need a signed-in admin; annotations are public. Put the actual Gradle error where anyone can read it.
+      - name: Report the Gradle error
+        if: failure()
+        run: |
+          msg=$(grep -E -A25 "What went wrong|^e: |FAILED$" gradle.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+          echo "::error title=Gradle::${msg:-see the job log}"
 
       - name: Publish test reports
         if: always()
@@ -42,7 +49,14 @@ jobs:
 
       # The APK runs its own demo city; this only pre-fills the "connect to a server" dialog.
       - name: Build the release APK
-        run: ./gradlew :androidApp:assembleRelease --no-daemon -Pstrela.serverUrl=http://10.0.2.2:8080
+        run: ./gradlew :androidApp:assembleRelease --no-daemon -Pstrela.serverUrl=http://10.0.2.2:8080 2>&1 | tee -a gradle.log
+
+      # Job logs need a signed-in admin; annotations are public. Put the actual Gradle error where anyone can read it.
+      - name: Report the Gradle error
+        if: failure()
+        run: |
+          msg=$(grep -E -A25 "What went wrong|^e: |FAILED$" gradle.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+          echo "::error title=Gradle::${msg:-see the job log}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -61,7 +75,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build the browser app
-        run: ./gradlew :composeApp:wasmJsBrowserDistribution --no-daemon
+        run: ./gradlew :composeApp:wasmJsBrowserDistribution --no-daemon 2>&1 | tee -a gradle.log
+
+      # Job logs need a signed-in admin; annotations are public. Put the actual Gradle error where anyone can read it.
+      - name: Report the Gradle error
+        if: failure()
+        run: |
+          msg=$(grep -E -A25 "What went wrong|^e: |FAILED$" gradle.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+          echo "::error title=Gradle::${msg:-see the job log}"
 
       - uses: actions/upload-artifact@v4
         with:
