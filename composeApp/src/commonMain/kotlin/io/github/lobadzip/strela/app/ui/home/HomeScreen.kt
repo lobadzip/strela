@@ -41,15 +41,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlin.math.roundToInt
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -63,7 +66,6 @@ import io.github.lobadzip.strela.app.ui.map.CourierMarker
 import io.github.lobadzip.strela.app.ui.map.MapCamera
 import io.github.lobadzip.strela.app.ui.map.MapPadding
 import io.github.lobadzip.strela.app.ui.map.MapRoute
-import io.github.lobadzip.strela.app.ui.map.MapScope
 import io.github.lobadzip.strela.app.ui.map.MapStyle
 import io.github.lobadzip.strela.app.ui.map.PlacePin
 import io.github.lobadzip.strela.app.ui.map.PriceMarker
@@ -76,7 +78,6 @@ import io.github.lobadzip.strela.model.Format
 import io.github.lobadzip.strela.model.GeoPoint
 import io.github.lobadzip.strela.model.Order
 import io.github.lobadzip.strela.model.OrderStatus
-import kotlinx.coroutines.launch
 
 private enum class Mode { LOADING, OFFLINE, POOL, ACTIVE }
 
@@ -99,7 +100,6 @@ fun HomeScreen(
     val snapshot = state.snapshot
     val mode = snapshot.mode()
     val active = snapshot?.active?.firstOrNull()
-    val scope = rememberCoroutineScope()
     val density = LocalDensity.current
 
     val camera = remember { MapCamera(snapshot?.courier?.position ?: GeoPoint(55.7539, 37.6208), 14.0) }
@@ -107,48 +107,56 @@ fun HomeScreen(
     val selected = snapshot?.available?.firstOrNull { it.id == selectedId }
     var showFailDialog by remember { mutableStateOf(false) }
 
-    val sheetState = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded, skipHiddenState = true)
+    // Two resting places: open (everything visible) and tucked away (just the headline, all map).
+    val sheetState = rememberStandardBottomSheetState(initialValue = SheetValue.Expanded, skipHiddenState = true)
     val scaffold = rememberBottomSheetScaffoldState(sheetState)
     val navBar = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
     val statusBar = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
-    val peek: Dp = when (mode) {
-        Mode.LOADING -> 160.dp
-        Mode.OFFLINE -> 300.dp
-        Mode.POOL -> 330.dp
-        Mode.ACTIVE -> 410.dp
-    } + navBar
+    val peek: Dp = (if (mode == Mode.ACTIVE) 122.dp else 106.dp) + navBar
 
-    // Keep the camera's clear area above the sheet wherever the courier left it.
-    var mapHeight by remember { mutableStateOf(0) }
-    val sheetTop = runCatching { sheetState.requireOffset() }.getOrNull()
-    val covered = with(density) {
-        if (sheetTop != null && mapHeight > 0) (mapHeight - sheetTop).coerceAtLeast(peek.toPx()) else peek.toPx()
-    }
-    val padding = with(density) {
-        MapPadding(left = 40.dp.toPx(), top = (statusBar + 110.dp).toPx(), right = 40.dp.toPx(), bottom = covered + 56.dp.toPx())
+    // A new situation deserves the full panel; so does arriving, when the swipe becomes the next step.
+    LaunchedEffect(mode, active?.id, active?.status) { runCatching { sheetState.expand() } }
+    LaunchedEffect(snapshot?.navigation?.arrived) {
+        if (snapshot?.navigation?.arrived == true) runCatching { sheetState.expand() }
     }
 
-    // What the camera should keep in frame right now.
-    val focus: List<GeoPoint> = when {
+    // The courier as drawn: gliding between fixes. The camera and the route follow this, not the raw fix.
+    val courier = animatedPosition(snapshot?.courier?.position ?: camera.center)
+
+    // What else the camera keeps in frame besides the courier. Changes only when the situation does.
+    val others: List<GeoPoint> = when {
         snapshot == null -> emptyList()
-        active != null -> listOf(snapshot.courier.position, active.target.point) +
+        active != null -> listOf(active.target.point) +
             if (active.status == OrderStatus.ACCEPTED) listOf(active.dropoff.point) else emptyList()
-        selected != null -> listOf(snapshot.courier.position, selected.pickup.point, selected.dropoff.point)
-        else -> listOf(snapshot.courier.position) + snapshot.available.take(5).map { it.pickup.point }
+        selected != null -> listOf(selected.pickup.point, selected.dropoff.point)
+        else -> snapshot.available.take(5).map { it.pickup.point }
     }
-    val focusKey = listOf(mode, selectedId, active?.id, active?.status)
+    val othersState = rememberUpdatedState(others)
+    val hasSnapshot = rememberUpdatedState(snapshot != null)
+    val maxZoom = rememberUpdatedState(if (mode == Mode.ACTIVE) 17.0 else 16.5)
+    val peekState = rememberUpdatedState(peek)
 
-    // Re-frame when the situation changes; while following, keep re-framing as the courier moves.
-    LaunchedEffect(focusKey, camera.viewport, peek, sheetState.currentValue) {
-        if (focus.isNotEmpty()) {
-            camera.isFollowing = true
-            camera.fit(focus, padding, maxZoom = 16.5)
-        }
-    }
-    LaunchedEffect(snapshot?.courier?.position) {
-        if (mode == Mode.ACTIVE && camera.isFollowing && focus.isNotEmpty()) {
-            camera.fit(focus, padding, maxZoom = 17.0)
-        }
+    // Whenever the situation changes, go back to following it. Moving the sheet is not a new situation.
+    LaunchedEffect(mode, selectedId, active?.id, active?.status) { camera.isFollowing = true }
+
+    // Recomputed whenever the courier glides, the sheet moves or the focus changes; the camera eases
+    // towards it frame by frame. Nothing here recomposes the screen.
+    LaunchedEffect(camera) {
+        val top = with(density) { (statusBar + 110.dp).toPx() }
+        val side = with(density) { 40.dp.toPx() }
+        val gap = with(density) { 56.dp.toPx() }
+        snapshotFlow {
+            if (!hasSnapshot.value) return@snapshotFlow null
+            val peekPx = with(density) { peekState.value.toPx() }
+            val height = camera.viewport.height
+            val sheetTop = runCatching { sheetState.requireOffset() }.getOrNull()
+            val covered = if (sheetTop != null && height > 0) (height - sheetTop).coerceAtLeast(peekPx) else peekPx
+            camera.framing(
+                listOf(courier.value) + othersState.value,
+                MapPadding(left = side, top = top, right = side, bottom = covered + gap),
+                maxZoom.value,
+            )
+        }.collect { camera.follow(it) }
     }
 
     val routes = buildList {
@@ -156,12 +164,15 @@ fun HomeScreen(
         when {
             active != null && active.status == OrderStatus.ACCEPTED -> {
                 add(MapRoute(active.route, c.textTertiary.copy(alpha = 0.7f), width = 5.dp, casing = c.routeCasing))
-                nav?.let { add(MapRoute(it.remaining, c.brand, width = 7.dp, dashed = true, casing = null)) }
+                nav?.let { add(MapRoute(it.remaining, c.brand, width = 7.dp, dashed = true, casing = null, head = { courier.value })) }
             }
-            active != null -> nav?.let { add(MapRoute(it.remaining, c.brand, width = 6.dp, casing = c.routeCasing)) }
+            active != null -> nav?.let {
+                add(MapRoute(it.remaining, c.brand, width = 6.dp, casing = c.routeCasing, head = { courier.value }))
+            }
             selected != null -> add(MapRoute(selected.route, c.brand, width = 5.dp, casing = c.routeCasing))
         }
     }
+    val listMaxHeight = with(density) { (camera.viewport.height * 0.42f).toDp() }.coerceAtLeast(240.dp)
 
     BottomSheetScaffold(
         scaffoldState = scaffold,
@@ -170,7 +181,9 @@ fun HomeScreen(
         sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         sheetShadowElevation = 18.dp,
         sheetDragHandle = {
-            Box(Modifier.padding(top = 10.dp, bottom = 6.dp).size(width = 40.dp, height = 5.dp).clip(CircleShape).background(c.divider))
+            Box(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(width = 40.dp, height = 5.dp).clip(CircleShape).background(c.divider))
+            }
         },
         containerColor = c.mapBackground,
         sheetContent = {
@@ -187,6 +200,7 @@ fun HomeScreen(
                             snapshot = snapshot!!,
                             selectedId = selectedId,
                             busy = state.busy,
+                            listMaxHeight = listMaxHeight,
                             onSelect = { selectedId = if (selectedId == it.id) null else it.id },
                             onAccept = { graph.session.accept(it) },
                         )
@@ -209,7 +223,7 @@ fun HomeScreen(
             }
         },
     ) {
-        Box(Modifier.fillMaxSize().onSizeChanged { mapHeight = it.height }) {
+        Box(Modifier.fillMaxSize()) {
             TileMap(
                 camera = camera,
                 tiles = graph.tiles,
@@ -244,7 +258,7 @@ fun HomeScreen(
                             }
                         }
                     }
-                    AnimatedCourier(snapshot.courier.position, snapshot.courier.heading)
+                    CourierMarker(snapshot.courier.heading, Modifier.anchoredAt({ courier.value }))
                 }
             }
 
@@ -257,16 +271,21 @@ fun HomeScreen(
                 },
             )
 
+            // Sits just above the sheet wherever it is; positioned at layout time, so dragging the sheet
+            // moves the button without recomposing the screen.
             AnimatedVisibility(
-                visible = !camera.isFollowing && focus.isNotEmpty(),
+                visible = !camera.isFollowing && snapshot != null,
                 enter = scaleIn() + fadeIn(),
                 exit = scaleOut() + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = with(density) { covered.toDp() } + 16.dp),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset {
+                        val sheetTop = runCatching { sheetState.requireOffset() }.getOrNull()
+                            ?: (camera.viewport.height - peek.toPx())
+                        IntOffset(-16.dp.roundToPx(), (sheetTop - 64.dp.toPx()).roundToInt())
+                    },
             ) {
-                MapButton(StrelaIcons.MyLocation, onClick = {
-                    camera.isFollowing = true
-                    scope.launch { camera.fit(focus, padding, maxZoom = 16.5) }
-                })
+                MapButton(StrelaIcons.MyLocation, onClick = { camera.isFollowing = true })
             }
         }
     }
@@ -280,12 +299,6 @@ fun HomeScreen(
             },
         )
     }
-}
-
-@Composable
-private fun MapScope.AnimatedCourier(position: GeoPoint, heading: Double) {
-    val animated by animatedPosition(position)
-    CourierMarker(heading, Modifier.anchoredAt(animated))
 }
 
 @Composable

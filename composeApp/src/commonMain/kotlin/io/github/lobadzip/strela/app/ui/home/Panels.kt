@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.lobadzip.strela.app.ui.components.OrderTagChip
 import io.github.lobadzip.strela.app.ui.components.PaymentChip
@@ -98,6 +99,7 @@ fun PoolPanel(
     snapshot: CourierSnapshot,
     selectedId: String?,
     busy: Set<String>,
+    listMaxHeight: Dp,
     onSelect: (Order) -> Unit,
     onAccept: (Order) -> Unit,
 ) {
@@ -128,7 +130,7 @@ fun PoolPanel(
         val ordered = known.mapNotNull { id -> snapshot.available.firstOrNull { it.id == id } }
 
         LazyColumn(
-            Modifier.fillMaxWidth().heightIn(max = 620.dp),
+            Modifier.fillMaxWidth().heightIn(max = listMaxHeight),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

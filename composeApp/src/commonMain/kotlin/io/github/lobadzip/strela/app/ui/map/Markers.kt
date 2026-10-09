@@ -1,5 +1,6 @@
 package io.github.lobadzip.strela.app.ui.map
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animate
@@ -27,43 +28,59 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import io.github.lobadzip.strela.app.ui.theme.Strela
 import io.github.lobadzip.strela.app.ui.theme.StrelaIcons
 import io.github.lobadzip.strela.model.Geo
 import io.github.lobadzip.strela.model.GeoPoint
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 /**
- * Glides between position updates instead of jumping, so a courier reported once a second still
- * moves like a car on the map. Big jumps (a teleport, a fresh session) snap.
+ * Glides between position updates instead of jumping. Each glide lasts as long as the gap between
+ * the last two updates, so the marker moves at an even speed and arrives just as the next fix comes
+ * in: no stop-and-go. Big jumps (a teleport, a fresh session) snap.
  */
 @Composable
-fun animatedPosition(target: GeoPoint, durationMs: Int = 950): State<GeoPoint> {
+fun animatedPosition(target: GeoPoint): State<GeoPoint> {
     val position = remember { mutableStateOf(target) }
+    val lastUpdate = remember { mutableStateOf<TimeMark?>(null) }
     LaunchedEffect(target) {
+        val since = lastUpdate.value?.elapsedNow()?.inWholeMilliseconds
+        lastUpdate.value = TimeSource.Monotonic.markNow()
         val from = position.value
-        if (Geo.distance(from, target) > 2_000) {
+        if (since == null || Geo.distance(from, target) > 2_000) {
             position.value = target
             return@LaunchedEffect
         }
+        val duration = since.toInt().coerceIn(MIN_GLIDE_MS, MAX_GLIDE_MS)
         // A new fix mid-glide restarts from wherever the marker is now, so there is never a jump.
-        animate(0f, 1f, animationSpec = tween(durationMs, easing = LinearEasing)) { t, _ ->
+        animate(0f, 1f, animationSpec = tween(duration, easing = LinearEasing)) { t, _ ->
             position.value = Geo.lerp(from, target, t.toDouble())
         }
     }
     return position
 }
 
+private const val MIN_GLIDE_MS = 250
+private const val MAX_GLIDE_MS = 1_500
+
 /** The courier: a dark puck with the brand arrow, breathing so it is easy to find. */
 @Composable
 fun CourierMarker(heading: Double, modifier: Modifier = Modifier, color: Color = Strela.colors.brand) {
+    // Turn the short way round (350° → 10° is 20°, not 340°), and smoothly rather than in steps.
+    val rotation = remember { Animatable(heading.toFloat()) }
+    LaunchedEffect(heading) {
+        val delta = ((heading.toFloat() - rotation.value) % 360f + 540f) % 360f - 180f
+        rotation.animateTo(rotation.value + delta, tween(450))
+    }
     val pulse = rememberInfiniteTransition()
     val ring by pulse.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing), RepeatMode.Restart))
     Box(modifier.size(72.dp), contentAlignment = Alignment.Center) {
@@ -79,7 +96,12 @@ fun CourierMarker(heading: Double, modifier: Modifier = Modifier, color: Color =
             contentAlignment = Alignment.Center,
         ) {
             // The glyph points north-east, hence the 45° correction.
-            Icon(StrelaIcons.Navigation, null, tint = color, modifier = Modifier.size(22.dp).rotate((heading - 45).toFloat()))
+            Icon(
+                StrelaIcons.Navigation,
+                null,
+                tint = color,
+                modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = rotation.value - 45f },
+            )
         }
     }
 }

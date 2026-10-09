@@ -2,14 +2,19 @@ package io.github.lobadzip.strela.app.ui.map
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -27,6 +32,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -37,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lobadzip.strela.model.GeoPoint
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.pow
@@ -48,12 +56,21 @@ data class MapRoute(
     val width: Dp = 6.dp,
     val dashed: Boolean = false,
     val casing: Color? = Color.White,
+    /**
+     * Where the line really starts right now, e.g. the courier marker mid-glide. Read at draw time,
+     * so the route stays glued to the marker without recomposing anything.
+     */
+    val head: (() -> GeoPoint)? = null,
 )
 
 /** Lets map content pin itself to coordinates. */
 interface MapScope {
     /** Places the element so that its ([alignX], [alignY]) fraction sits on [point]. */
-    fun Modifier.anchoredAt(point: GeoPoint, alignX: Float = 0.5f, alignY: Float = 0.5f): Modifier
+    fun Modifier.anchoredAt(point: GeoPoint, alignX: Float = 0.5f, alignY: Float = 0.5f): Modifier =
+        anchoredAt({ point }, alignX, alignY)
+
+    /** Same, for a point that moves every frame: read at placement time only, never recomposes. */
+    fun Modifier.anchoredAt(point: () -> GeoPoint, alignX: Float = 0.5f, alignY: Float = 0.5f): Modifier
 }
 
 /**
@@ -76,6 +93,7 @@ fun TileMap(
     SideEffect { camera.tileSizePx = tileSize }
     val scope = rememberCoroutineScope()
     val mapScope = remember(camera) { MapScopeImpl(camera) }
+    LaunchedEffect(camera) { camera.runFollowLoop() }
 
     Box(
         modifier
@@ -83,10 +101,44 @@ fun TileMap(
             .background(background)
             .onSizeChanged { camera.viewport = it }
             .pointerInput(camera) {
-                detectTransformGestures { centroid, pan, zoomChange, _ ->
-                    camera.onUserGesture()
-                    camera.zoomAround(centroid, zoomChange)
-                    camera.panBy(pan.x, pan.y)
+                // Pan and pinch, with a fling at the end: the map keeps gliding after a swipe.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    camera.stopFling()
+                    val velocity = VelocityTracker()
+                    var dragging = false
+                    var pinched = false
+                    var travelled = Offset.Zero
+                    do {
+                        val event = awaitPointerEvent()
+                        if (event.changes.any { it.isConsumed }) break
+                        val pan = event.calculatePan()
+                        val zoomChange = event.calculateZoom()
+                        if (!dragging) {
+                            travelled += pan
+                            if (travelled.getDistance() > viewConfiguration.touchSlop || abs(zoomChange - 1f) > 0.02f) {
+                                dragging = true
+                                camera.onUserGesture()
+                            }
+                        }
+                        if (dragging) {
+                            if (zoomChange != 1f) pinched = true
+                            camera.zoomAround(event.calculateCentroid(useCurrent = false), zoomChange)
+                            camera.panBy(pan.x, pan.y)
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                        if (event.changes.size == 1) {
+                            val change = event.changes.first()
+                            velocity.addPosition(change.uptimeMillis, change.position)
+                        } else {
+                            velocity.resetTracking()
+                        }
+                    } while (event.changes.any { it.pressed })
+
+                    if (dragging && !pinched) {
+                        val v = velocity.calculateVelocity()
+                        scope.launch { camera.fling(v.x, v.y) }
+                    }
                 }
             }
             .pointerInput(camera, onTap) {
@@ -136,12 +188,12 @@ fun TileMap(
 }
 
 private class MapScopeImpl(private val camera: MapCamera) : MapScope {
-    override fun Modifier.anchoredAt(point: GeoPoint, alignX: Float, alignY: Float): Modifier =
+    override fun Modifier.anchoredAt(point: () -> GeoPoint, alignX: Float, alignY: Float): Modifier =
         layout { measurable, constraints ->
             val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
             layout(placeable.width, placeable.height) {
-                // Reading the camera here re-places the marker on every move without recomposing it.
-                val at = camera.toScreen(point)
+                // Reading the camera (and a moving point) here re-places the marker without recomposing it.
+                val at = camera.toScreen(point())
                 placeable.place(
                     (at.x - placeable.width * alignX).roundToInt(),
                     (at.y - placeable.height * alignY).roundToInt(),
@@ -197,7 +249,7 @@ private fun DrawScope.drawRoute(camera: MapCamera, route: MapRoute) {
     if (route.points.size < 2) return
     val path = Path()
     route.points.forEachIndexed { i, p ->
-        val o: Offset = camera.toScreen(p)
+        val o: Offset = camera.toScreen(if (i == 0) route.head?.invoke() ?: p else p)
         if (i == 0) path.moveTo(o.x, o.y) else path.lineTo(o.x, o.y)
     }
     val width = route.width.toPx()

@@ -38,6 +38,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,7 +62,6 @@ import io.github.lobadzip.strela.app.ui.map.CourierMarker
 import io.github.lobadzip.strela.app.ui.map.MapCamera
 import io.github.lobadzip.strela.app.ui.map.MapPadding
 import io.github.lobadzip.strela.app.ui.map.MapRoute
-import io.github.lobadzip.strela.app.ui.map.MapScope
 import io.github.lobadzip.strela.app.ui.map.MapStyle
 import io.github.lobadzip.strela.app.ui.map.PlacePin
 import io.github.lobadzip.strela.app.ui.map.TileMap
@@ -96,27 +97,38 @@ private fun TrackingContent(graph: AppGraph, view: TrackingView) {
     val c = Strela.colors
     val density = LocalDensity.current
     val camera = remember { MapCamera(view.dropoff.point, 14.0) }
-    var panelHeight by remember { mutableStateOf(0) }
+    val panelHeight = remember { mutableStateOf(0) }
+    val moving = view.courier != null && (view.status == OrderStatus.ACCEPTED || view.status == OrderStatus.PICKED_UP)
+    // The courier as drawn, gliding between fixes; the camera and the route head follow this.
+    val courier = animatedPosition(view.courier?.position ?: view.dropoff.point)
 
-    val focus = buildList {
-        view.courier?.let { add(it.position) }
+    val others = buildList {
         if (view.status == OrderStatus.AVAILABLE || view.status == OrderStatus.ACCEPTED) add(view.pickup.point)
         add(view.dropoff.point)
     }
-    val padding = with(density) { MapPadding(48.dp.toPx(), 110.dp.toPx(), 48.dp.toPx(), panelHeight + 30.dp.toPx()) }
-    LaunchedEffect(view.status, camera.viewport, panelHeight) {
-        camera.isFollowing = true
-        camera.fit(focus, padding, maxZoom = 16.0)
+    val othersState = rememberUpdatedState(others)
+    val movingState = rememberUpdatedState(moving)
+
+    LaunchedEffect(view.status) { camera.isFollowing = true }
+    LaunchedEffect(camera) {
+        val side = with(density) { 48.dp.toPx() }
+        val top = with(density) { 110.dp.toPx() }
+        val gap = with(density) { 30.dp.toPx() }
+        snapshotFlow {
+            val points = (if (movingState.value) listOf(courier.value) else emptyList()) + othersState.value
+            camera.framing(points, MapPadding(side, top, side, panelHeight.value + gap), maxZoom = 16.5)
+        }.collect { camera.follow(it) }
     }
-    LaunchedEffect(view.courier?.position) { if (camera.isFollowing) camera.fit(focus, padding, maxZoom = 16.5) }
 
     val routes = when (view.status) {
         OrderStatus.AVAILABLE -> listOf(MapRoute(view.route, c.textTertiary, width = 5.dp, casing = c.routeCasing))
         OrderStatus.ACCEPTED -> listOf(
             MapRoute(view.route, c.textTertiary.copy(alpha = 0.7f), width = 5.dp, casing = c.routeCasing),
-            MapRoute(view.remainingRoute, c.brand, width = 7.dp, dashed = true, casing = null),
+            MapRoute(view.remainingRoute, c.brand, width = 7.dp, dashed = true, casing = null, head = { courier.value }),
         )
-        OrderStatus.PICKED_UP -> listOf(MapRoute(view.remainingRoute, c.brand, width = 6.dp, casing = c.routeCasing))
+        OrderStatus.PICKED_UP -> listOf(
+            MapRoute(view.remainingRoute, c.brand, width = 6.dp, casing = c.routeCasing, head = { courier.value }),
+        )
         else -> emptyList()
     }
 
@@ -133,8 +145,8 @@ private fun TrackingContent(graph: AppGraph, view: TrackingView) {
                 PlacePin(StrelaIcons.Store, c.ink, Modifier.anchoredAt(view.pickup.point, 0.5f, 1f))
             }
             PlacePin(StrelaIcons.Home, c.brand, Modifier.anchoredAt(view.dropoff.point, 0.5f, 1f), label = "Вы")
-            if (view.courier != null && (view.status == OrderStatus.ACCEPTED || view.status == OrderStatus.PICKED_UP)) {
-                Courier(view.courier!!.position, view.courier!!.heading)
+            if (moving) {
+                CourierMarker(view.courier!!.heading, Modifier.anchoredAt({ courier.value }))
             }
         }
 
@@ -163,7 +175,7 @@ private fun TrackingContent(graph: AppGraph, view: TrackingView) {
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .heightIn(max = 520.dp)
-                .onSizeChanged { panelHeight = it.height }
+                .onSizeChanged { panelHeight.value = it.height }
                 .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                 .background(c.card)
                 .verticalScroll(rememberScrollState())
@@ -215,12 +227,6 @@ private fun TrackingContent(graph: AppGraph, view: TrackingView) {
             }
         }
     }
-}
-
-@Composable
-private fun MapScope.Courier(position: GeoPoint, heading: Double) {
-    val animated by animatedPosition(position)
-    CourierMarker(heading, Modifier.anchoredAt(animated))
 }
 
 @Composable

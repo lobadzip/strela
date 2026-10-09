@@ -7,13 +7,21 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
 import io.github.lobadzip.strela.model.GeoPoint
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan
+import kotlin.math.exp
+import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.log2
 import kotlin.math.max
@@ -36,9 +44,16 @@ internal object Mercator {
 /** Insets in pixels that the camera keeps clear, e.g. for a bottom sheet over the map. */
 data class MapPadding(val left: Float = 0f, val top: Float = 0f, val right: Float = 0f, val bottom: Float = 0f)
 
+/** Where the camera wants to be: a centre and a zoom. */
+data class CameraTarget(val center: GeoPoint, val zoom: Double)
+
 /**
  * Where the map is looking. Plain snapshot state, so markers and the canvas follow it without
- * recomposing anything, and screens can animate it like any other value.
+ * recomposing anything.
+ *
+ * Screens do not animate the camera themselves. They publish a [CameraTarget] as often as they like
+ * (every frame is fine) and the camera eases towards it frame by frame. A new target mid-motion just
+ * bends the path: no restarts, no jerks, no zoom "breathing" from animations fighting each other.
  */
 @Stable
 class MapCamera(center: GeoPoint, zoom: Double) {
@@ -51,10 +66,13 @@ class MapCamera(center: GeoPoint, zoom: Double) {
         internal set
     internal var tileSizePx by mutableStateOf(256f)
 
-    /** Flips to false when the user drags the map; screens use it to stop auto-following. */
+    /** Flips to false when the user drags the map; the camera then stays where they put it. */
     var isFollowing by mutableStateOf(true)
 
+    private val target = MutableStateFlow<CameraTarget?>(null)
+    private var lastFrameNanos = -1L
     private var animation: Job? = null
+    private var fling: Job? = null
 
     private fun worldSize(z: Double = zoom) = tileSizePx * 2.0.pow(z)
 
@@ -88,9 +106,34 @@ class MapCamera(center: GeoPoint, zoom: Double) {
         panBy(pivot.x - moved.x, pivot.y - moved.y)
     }
 
+    /** A finger touched the map: everything automatic stops, the user is in charge now. */
     internal fun onUserGesture() {
         animation?.cancel()
+        fling?.cancel()
         isFollowing = false
+    }
+
+    internal fun stopFling() {
+        fling?.cancel()
+    }
+
+    /** Keeps the map gliding after a swipe, slowing down like a puck on ice. */
+    internal suspend fun fling(velocityX: Float, velocityY: Float) {
+        fling?.cancel()
+        fling = currentCoroutineContext()[Job]
+        var vx = velocityX
+        var vy = velocityY
+        var last = -1L
+        while (hypot(vx, vy) > MIN_FLING_SPEED) {
+            withFrameNanos { now ->
+                val dt = if (last < 0) 1f / 60 else ((now - last) / 1e9f).coerceIn(0f, 0.05f)
+                last = now
+                panBy(vx * dt, vy * dt)
+                val decay = exp(-FLING_FRICTION * dt)
+                vx *= decay
+                vy *= decay
+            }
+        }
     }
 
     fun snapTo(center: GeoPoint, zoom: Double = this.zoom) {
@@ -99,6 +142,7 @@ class MapCamera(center: GeoPoint, zoom: Double) {
         this.zoom = zoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
     }
 
+    /** A one-off timed move, for gestures like double-tap zoom. */
     suspend fun animateTo(target: GeoPoint, targetZoom: Double = zoom, durationMs: Int = 700) {
         animation?.cancel()
         animation = currentCoroutineContext()[Job]
@@ -114,13 +158,55 @@ class MapCamera(center: GeoPoint, zoom: Double) {
         }
     }
 
-    /** Frames [points] inside the viewport minus [padding]. */
-    suspend fun fit(points: List<GeoPoint>, padding: MapPadding, maxZoom: Double = 16.5, animate: Boolean = true) {
-        val (target, targetZoom) = framing(points, padding, maxZoom) ?: return
-        if (animate) animateTo(target, targetZoom) else snapTo(target, targetZoom)
+    /** Where the camera should go while it is following. Cheap; call it as often as the scene changes. */
+    fun follow(next: CameraTarget?) {
+        target.value = next
     }
 
-    private fun framing(points: List<GeoPoint>, padding: MapPadding, maxZoom: Double): Pair<GeoPoint, Double>? {
+    /**
+     * Runs for the lifetime of the map: eases towards the latest target while following, and sleeps
+     * (no frames requested) once it has arrived, so an idle map costs nothing.
+     */
+    suspend fun runFollowLoop() {
+        combine(target, snapshotFlow { isFollowing }) { t, following -> t.takeIf { following } }
+            .collectLatest { goal ->
+                if (goal == null) return@collectLatest
+                val goalX = Mercator.x(goal.center.lon)
+                val goalY = Mercator.y(goal.center.lat)
+                val goalZoom = goal.zoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
+                while (true) {
+                    val arrived = withFrameNanos { now ->
+                        // Real frame time, kept across target changes: a 30 fps phone eases at the same pace.
+                        val gap = now - lastFrameNanos
+                        val dt = if (lastFrameNanos < 0 || gap > 200_000_000) 1.0 / 60 else gap / 1e9
+                        lastFrameNanos = now
+                        step(goalX, goalY, goalZoom, dt)
+                    }
+                    if (arrived) break
+                }
+            }
+    }
+
+    /** One frame of exponential easing. Returns true once the remaining distance is below a pixel. */
+    private fun step(goalX: Double, goalY: Double, goalZoom: Double, dt: Double): Boolean {
+        val x = Mercator.x(center.lon)
+        val y = Mercator.y(center.lat)
+        val ws = worldSize()
+        val farPx = hypot((goalX - x) * ws, (goalY - y) * ws)
+        if (farPx < 0.3 && abs(goalZoom - zoom) < 0.002) {
+            center = GeoPoint(Mercator.lat(goalY), Mercator.lon(goalX))
+            zoom = goalZoom
+            return true
+        }
+        val k = 1 - exp(-dt / FOLLOW_TIME_S)
+        val kz = 1 - exp(-dt / ZOOM_TIME_S)
+        center = GeoPoint(Mercator.lat(y + (goalY - y) * k), Mercator.lon(x + (goalX - x) * k))
+        zoom += (goalZoom - zoom) * kz
+        return false
+    }
+
+    /** The centre and zoom that frame [points] inside the viewport minus [padding]. */
+    fun framing(points: List<GeoPoint>, padding: MapPadding, maxZoom: Double = 16.5): CameraTarget? {
         if (points.isEmpty() || viewport.width == 0 || viewport.height == 0) return null
         val xs = points.map { Mercator.x(it.lon) }
         val ys = points.map { Mercator.y(it.lat) }
@@ -142,11 +228,17 @@ class MapCamera(center: GeoPoint, zoom: Double) {
         val shiftY = (padding.top + height / 2 - viewport.height / 2.0) / ws
         val cx = (minX + maxX) / 2 - shiftX
         val cy = (minY + maxY) / 2 - shiftY
-        return GeoPoint(Mercator.lat(cy), Mercator.lon(cx)) to z
+        return CameraTarget(GeoPoint(Mercator.lat(cy), Mercator.lon(cx)), z)
     }
 
     companion object {
         const val MIN_ZOOM = 3.0
         const val MAX_ZOOM = 19.0
+
+        /** Seconds for the camera to cover ~63% of the way to its target: quick, but never a jump. */
+        private const val FOLLOW_TIME_S = 0.35
+        private const val ZOOM_TIME_S = 0.55
+        private const val FLING_FRICTION = 4.5f
+        private const val MIN_FLING_SPEED = 40f
     }
 }
